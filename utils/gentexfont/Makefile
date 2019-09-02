@@ -1,7 +1,8 @@
 
 # Makefile for the gentexfont program.
 
-LDFLAGS = -L/usr/X11R6/lib -lX11
+CFLAGS = -I/usr/X11R7/include 
+LDFLAGS = -L/usr/X11R7/lib -lX11
 
 all: gentexfont
 
