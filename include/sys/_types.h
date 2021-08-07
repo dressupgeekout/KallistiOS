@@ -9,12 +9,17 @@
 #ifndef _SYS__TYPES_H
 #define _SYS__TYPES_H
 
+#include <kos/cdefs.h>
+__BEGIN_DECLS
+
 #include <sys/lock.h>
+#include <newlib.h>
 
 // This part copied from newlib's sys/_types.h.
 #ifndef __off_t_defined
 /** \brief  File offset type. */
 typedef long _off_t;
+typedef _off_t __off_t;
 #endif
 
 #ifndef __dev_t_defined
@@ -83,6 +88,67 @@ typedef __newlib_recursive_lock_t _flock_t;
 typedef void *_iconv_t;
 #endif
 
+#ifndef __blkcnt_t_defined
+typedef long __blkcnt_t;
+#endif
+
+#ifndef __blksize_t_defined
+typedef long __blksize_t;
+#endif
+
+#ifndef __fsblkcnt_t_defined
+typedef unsigned long long __fsblkcnt_t;
+#endif
+
+#ifndef __fsfilcnt_t_defined
+typedef unsigned long __fsfilcnt_t;
+#endif
+
+#ifndef __id_t_defined
+typedef unsigned long __id_t;
+#endif
+
+#ifndef __ino_t_defined
+typedef unsigned long __ino_t;
+#endif
+
+#ifndef __pid_t_defined
+typedef int __pid_t;
+#endif
+
+#ifndef __key_t_defined
+typedef long __key_t;
+#endif
+
+#ifndef __mode_t_defined
+typedef unsigned long __mode_t;
+#endif
+
+typedef unsigned short __nlink_t;
+typedef long        __suseconds_t;  /* microseconds (signed) */
+typedef unsigned long   __useconds_t;   /* microseconds (unsigned) */
+
+#if __NEWLIB__ > 3
+#define _TIME_T  long long
+#else
+#define _TIME_T_ long
+#endif
+typedef _TIME_T_    __time_t;
+
+#ifndef __clockid_t_defined
+#define _CLOCKID_T_     unsigned long
+#endif
+
+typedef _CLOCKID_T_ __clockid_t;
+
+#define _TIMER_T_   unsigned long
+typedef _TIMER_T_   __timer_t;
+
+#ifndef __clock_t_defined
+#define _CLOCK_T_   unsigned long   /* clock() */
+#endif
+
+typedef _CLOCK_T_   __clock_t;
 
 // This part inserted to fix newlib brokenness.
 /** \brief  Size of an fd_set. */
@@ -142,5 +208,13 @@ typedef void *_iconv_t;
 #define __RESTRICT
 #endif
 #endif /* !__RESTRICT */
+
+#if __GNUC_MINOR__ > 95 || __GNUC__ >= 3
+typedef __builtin_va_list   __va_list;
+#else
+typedef char *          __va_list;
+#endif
+
+__END_DECLS
 
 #endif  /* _SYS__TYPES_H */

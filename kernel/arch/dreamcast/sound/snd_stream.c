@@ -3,6 +3,7 @@
    snd_stream.c
    Copyright (C) 2000, 2001, 2002, 2003, 2004 Dan Potter
    Copyright (C) 2002 Florian Schulze
+   Copyright (C) 2020 Lawrence Sebald
 
    SH-4 support routines for SPU streaming sound driver
 */
@@ -77,6 +78,9 @@ typedef struct strchan {
 
     /* Have we been initialized yet? (and reserved a buffer, etc) */
     volatile int    initted;
+
+    /* User data. */
+    void *user_data;
 } strchan_t;
 
 // Our stream structs
@@ -98,6 +102,16 @@ int16 * sep_buffer[2] = { NULL, NULL };
 void snd_stream_set_callback(snd_stream_hnd_t hnd, snd_stream_callback_t cb) {
     CHECK_HND(hnd);
     streams[hnd].get_data = cb;
+}
+
+void snd_stream_set_userdata(snd_stream_hnd_t hnd, void *d) {
+    CHECK_HND(hnd);
+    streams[hnd].user_data = d;
+}
+
+void *snd_stream_get_userdata(snd_stream_hnd_t hnd) {
+    CHECK_HND(hnd);
+    return streams[hnd].user_data;
 }
 
 void snd_stream_filter_add(snd_stream_hnd_t hnd, snd_stream_filter_t filtfunc, void * obj) {
@@ -288,7 +302,7 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
     return hnd;
 }
 
-int snd_stream_reinit(snd_stream_hnd_t hnd, snd_stream_callback_t cb) {
+snd_stream_hnd_t snd_stream_reinit(snd_stream_hnd_t hnd, snd_stream_callback_t cb) {
     CHECK_HND(hnd);
 
     /* Start off with queueing disabled */
@@ -432,7 +446,7 @@ void snd_stream_stop(snd_stream_hnd_t hnd) {
 
     /* Channel 1 */
     cmd->cmd_id = streams[hnd].ch[1];
-    snd_sh4_to_aica(tmp, AICA_CMDSTR_CHANNEL_SIZE);
+    snd_sh4_to_aica(tmp, cmd->size);
 }
 
 /* The DMA will chain to this to start the second DMA. */
@@ -476,10 +490,11 @@ int snd_stream_poll(snd_stream_hnd_t hnd) {
 
     /* round it a little bit */
     needed_samples &= ~0x7ff;
-    /* printf("last_write_pos %6i, current_play_pos %6i, needed_samples %6i\n",last_write_pos,current_play_pos,needed_samples); */
+    /* printf("last_write_pos %6u, current_play_pos %6u, needed_samples %6i\n",streams[hnd].last_write_pos,current_play_pos,needed_samples); */
 
     if(needed_samples > 0) {
         if(streams[hnd].stereo) {
+            needed_samples = (needed_samples > streams[hnd].buffer_size/4) ? streams[hnd].buffer_size/4 : needed_samples;
             data = streams[hnd].get_data(hnd, needed_samples * 4, &got_samples);
             process_filters(hnd, &data, &got_samples);
 
@@ -491,6 +506,7 @@ int snd_stream_poll(snd_stream_hnd_t hnd) {
             }
         }
         else {
+            needed_samples = needed_samples > streams[hnd].buffer_size/2 ? streams[hnd].buffer_size/2 : needed_samples;
             data = streams[hnd].get_data(hnd, needed_samples * 2, &got_samples);
             process_filters(hnd, &data, &got_samples);
 
@@ -547,5 +563,3 @@ void snd_stream_volume(snd_stream_hnd_t hnd, int vol) {
     cmd->cmd_id = streams[hnd].ch[1];
     snd_sh4_to_aica(tmp, cmd->size);
 }
-
-

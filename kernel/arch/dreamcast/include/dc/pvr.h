@@ -834,8 +834,15 @@ typedef struct {
     \return                 The packed coordinates
 */
 static inline uint32 PVR_PACK_16BIT_UV(float u, float v) {
-    return (((*((uint32 *) &u)) >> 0) & 0xFFFF0000) |
-           (((*((uint32 *) &v)) >> 16) & 0x0000FFFF);
+    union {
+        float f;
+        uint32 i;
+    } u2, v2;
+
+    u2.f = u;
+    v2.f = v;
+
+    return (u2.i & 0xFFFF0000) | (v2.i >> 16);
 }
 
 /** \defgroup pvr_commands          TA command values
@@ -1196,6 +1203,15 @@ void pvr_set_bg_color(float r, float g, float b);
                             volume will be modified by the shadow volume.
 */
 void pvr_set_shadow_scale(int enable, float scale_value);
+
+/** \brief  Set Z clipping depth.
+
+    This function sets the Z clipping depth. The default value for this is
+    0.0001.
+
+    \param  zc              The new value to set the z clip parameter to.
+*/
+void pvr_set_zclip(float zc);
 
 /** \brief  Retrieve the current VBlank count.
 

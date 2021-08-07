@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <time.h>
 
 #include "fatfs.h"
 #include "ucs.h"
@@ -29,6 +30,24 @@ static uint16_t longname_buf[256], longname_buf2[256];
 
 #define DOT_NAME    ".          "
 #define DOTDOT_NAME "..         "
+
+static uint8_t fat_shortname_checksum(char fn[11]) {
+    uint8_t rv = fn[0];
+
+    /* Rotate the existing value right by 1 and add the next character... */
+    rv = ((rv << 7) | (rv >> 1))  + fn[1];
+    rv = ((rv << 7) | (rv >> 1))  + fn[2];
+    rv = ((rv << 7) | (rv >> 1))  + fn[3];
+    rv = ((rv << 7) | (rv >> 1))  + fn[4];
+    rv = ((rv << 7) | (rv >> 1))  + fn[5];
+    rv = ((rv << 7) | (rv >> 1))  + fn[6];
+    rv = ((rv << 7) | (rv >> 1))  + fn[7];
+    rv = ((rv << 7) | (rv >> 1))  + fn[8];
+    rv = ((rv << 7) | (rv >> 1))  + fn[9];
+    rv = ((rv << 7) | (rv >> 1))  + fn[10];
+
+    return rv;
+}
 
 static int fat_search_dir(fat_fs_t *fs, const char *fn, uint32_t cluster,
                           fat_dentry_t *rv, uint32_t *rcl, uint32_t *roff) {
@@ -111,6 +130,8 @@ static int read_longname(fat_fs_t *fs, uint32_t *cluster, uint32_t *offset,
     fat_longname_t *lent;
     uint8_t *cl;
 
+    ++*offset;
+
     while(!done) {
         if(!(cl = fat_cluster_read(fs, *cluster, &err))) {
             dbglog(DBG_ERROR, "Error reading directory at cluster %" PRIu32
@@ -118,7 +139,7 @@ static int read_longname(fat_fs_t *fs, uint32_t *cluster, uint32_t *offset,
             return -EIO;
         }
 
-        for(i = (*offset) + 1; i < max; ++i) {
+        for(i = *offset; i < max; ++i) {
             ent = (fat_dentry_t *)(cl + (i << 5));
 
             /* If name[0] is zero, then we've hit the end of the directory. */
@@ -156,18 +177,24 @@ static int read_longname(fat_fs_t *fs, uint32_t *cluster, uint32_t *offset,
 
         if(!(*cluster & 0x80000000)) {
             *cluster = fat_read_fat(fs, *cluster, &err);
-            if(*cluster == 0xFFFFFFFF)
+            if(*cluster == 0xFFFFFFFF) {
                 return -EIO;
+            }
 
             if(fat_is_eof(fs, *cluster))
                 done = 1;
+
+            *offset = 0;
         }
         else {
             ++*cluster;
 
             *max2 -= max;
-            if(*max2 <= 0)
+            if(*max2 <= 0) {
                 return -EIO;
+            }
+
+            *offset = 0;
         }
     }
 
@@ -179,12 +206,12 @@ static int fat_search_long(fat_fs_t *fs, const char *fn, uint32_t cluster,
                            uint32_t *rlcl, uint32_t *rloff) {
     uint8_t *cl;
     int err, done = 0;
-    uint32_t i, max, skip = 0;
+    uint32_t i = 0, max, skip = 0;
     int32_t max2;
     fat_dentry_t *ent;
     fat_longname_t *lent;
     size_t l = strlen(fn);
-    uint32_t fnlen, lcl = 0, loff = 0;
+    uint32_t fnlen, lcl = 0, loff = 0, cluster2;
 
     /* Figure out how many directory entries there are in each cluster/block. */
     if(fs->sb.fs_type == FAT_FS_FAT32 || !(cluster & 0x80000000)) {
@@ -210,7 +237,8 @@ static int fat_search_long(fat_fs_t *fs, const char *fn, uint32_t cluster,
             return -EIO;
         }
 
-        for(i = 0; i < max && !done; ++i) {
+        for(; i < max && !done; ++i) {
+            cluster2 = cluster;
             ent = (fat_dentry_t *)(cl + (i << 5));
 
             /* Are we skipping this entry? */
@@ -274,10 +302,19 @@ static int fat_search_long(fat_fs_t *fs, const char *fn, uint32_t cluster,
             fat_ucs2_tolower(longname_buf, fnlen);
             fat_ucs2_tolower(longname_buf2, fnlen);
 
-            if(!memcmp(longname_buf, longname_buf2, fnlen)) {
+            if(!memcmp(longname_buf, longname_buf2, fnlen * sizeof(uint16_t))) {
                 /* The next entry should be the dentry we want (that is to say,
                    the short name entry for this long name). */
                 if(i < max) {
+                    if(cluster != cluster2) {
+                        if(!(cl = fat_cluster_read(fs, cluster, &err))) {
+                            dbglog(DBG_ERROR, "Error reading directory at "
+                                   "cluster %" PRIu32 ": %s\n", cluster,
+                                   strerror(err));
+                            return -EIO;
+                        }
+                    }
+
                     ent = (fat_dentry_t *)(cl + ((i + 1) << 5));
 
                     /* Make sure we got a valid short entry... */
@@ -288,7 +325,7 @@ static int fat_search_long(fat_fs_t *fs, const char *fn, uint32_t cluster,
 
                     *rv = *ent;
                     *rcl = cluster;
-                    *roff = (i << 5);
+                    *roff = ((i + 1) << 5);
                     *rlcl = lcl;
                     *rloff = loff;
 
@@ -335,8 +372,12 @@ static int fat_search_long(fat_fs_t *fs, const char *fn, uint32_t cluster,
                     return 0;
                 }
             }
-            else
+            else {
                 skip = 1;
+
+                if(cluster2 != cluster)
+                    break;
+            }
         }
 
         if(!(cluster & 0x80000000)) {
@@ -436,6 +477,16 @@ static int is_component_short(const char *fn) {
 
     /* If we get here, it should be fine... */
     return 1;
+}
+
+static int fat_find_child2(fat_fs_t *fs, const char fn[11],
+                           fat_dentry_t *parent) {
+    uint32_t cl;
+    uint32_t rcl, roff;
+    fat_dentry_t tmp;
+
+    cl = parent->cluster_low | (parent->cluster_high << 16);
+    return fat_search_dir(fs, fn, cl, &tmp, &rcl, &roff);
 }
 
 int fat_find_child(fat_fs_t *fs, const char *fn, fat_dentry_t *parent,
@@ -543,7 +594,6 @@ int fat_find_dentry(fat_fs_t *fs, const char *fn, fat_dentry_t *rv,
         }
 
         tok = strtok_r(NULL, "/", &tmp);
-        cl = cur.cluster_low | (cur.cluster_high << 16);
     }
 
     /* One last check... If the filename the user passed in ends with a '/'
@@ -602,6 +652,8 @@ int fat_erase_dentry(fat_fs_t *fs, uint32_t cl, uint32_t off, uint32_t lcl,
             max2 = (int32_t)fs->sb.root_dir;
         }
 
+        i = loff >> 5;
+
         while(!done) {
             if(!(buf = fat_cluster_read(fs, lcl, &err))) {
                 dbglog(DBG_ERROR, "Error reading directory entry at cluster %"
@@ -613,7 +665,7 @@ int fat_erase_dentry(fat_fs_t *fs, uint32_t cl, uint32_t off, uint32_t lcl,
             /* Just go ahead and do this now to save us the trouble later... */
             fat_cluster_mark_dirty(fs, lcl);
 
-            for(i = loff >> 5; i < max; ++i) {
+            for(; i < max; ++i) {
                 ent = (fat_dentry_t *)(buf + (i << 5));
 
                 /* If name[0] is zero, then we've hit the end of the
@@ -645,35 +697,44 @@ int fat_erase_dentry(fat_fs_t *fs, uint32_t cl, uint32_t off, uint32_t lcl,
                 ent->name[0] = FAT_ENTRY_FREE;
             }
 
-            /* Move onto the next cluster. */
-            if(!(lcl & 0x80000000)) {
-                lcl = fat_read_fat(fs, lcl, &err);
-                if(lcl == 0xFFFFFFFF) {
-                    dbglog(DBG_ERROR, "Invalid FAT value hit while reading long"
-                           " name entry for deletion at cluster %" PRIu32
-                           ", offset %" PRIu32 "\n", lcl, i << 5);
-                    return -err;
-                }
+	    if(!done) {
+                /* Move onto the next cluster. */
+                if(!(lcl & 0x80000000)) {
+                    lcl = fat_read_fat(fs, lcl, &err);
+                    if(lcl == 0xFFFFFFFF) {
+                        dbglog(DBG_ERROR, "Invalid FAT value hit while "
+			       "reading long name entry for deletion at "
+			       "cluster %" PRIu32 ", offset %" PRIu32 "\n",
+			       lcl, i << 5);
+                        return -err;
+                    }
 
-                /* This shouldn't happen either... */
-                if(fat_is_eof(fs, lcl)) {
-                    dbglog(DBG_ERROR, "End of directory hit while reading long "
-                           "name entry for deletion at cluster %" PRIu32
-                           ", offset %" PRIu32 "\n", lcl, i << 5);
-                    return -EIO;
-                }
-            }
-            else {
-                ++lcl;
-                max2 -= max;
+                    /* This shouldn't happen either... */
+                    if(fat_is_eof(fs, lcl)) {
+                        dbglog(DBG_ERROR, "End of directory hit while "
+			       "reading long name entry for deletion at "
+			       "cluster %" PRIu32 ", offset %" PRIu32 "\n",
+			       lcl, i << 5);
+                        return -EIO;
+                    }
 
-                if(max2 <= 0) {
-                    dbglog(DBG_ERROR, "End of directory hit while reading long "
-                           "name entry for deletion at cluster %" PRIu32
-                           ", offset %" PRIu32 "\n", lcl, i << 5);
-                    return -EIO;
+                    i = 0;
                 }
-            }
+                else {
+                    ++lcl;
+                    max2 -= max;
+
+                    if(max2 <= 0) {
+                        dbglog(DBG_ERROR, "End of directory hit while "
+			       "reading long name entry for deletion at "
+			       "cluster %" PRIu32 ", offset %" PRIu32 "\n",
+			       lcl, i << 5);
+                        return -EIO;
+                    }
+
+                    i = 0;
+                }
+	    }
         }
     }
 
@@ -758,11 +819,13 @@ int fat_is_dir_empty(fat_fs_t *fs, uint32_t cluster) {
 }
 
 static int fat_get_free_dentry(fat_fs_t *fs, uint32_t cluster, uint32_t *rcl,
-                               uint32_t *roff, fat_dentry_t **rv) {
+                               uint32_t *roff, fat_dentry_t **rv,
+                               uint32_t num) {
     uint8_t *cl;
     int err, done = 0;
-    uint32_t i, j = 0, max, old;
-    fat_dentry_t *ent;
+    uint32_t i, j = 0, max, old = cluster, ct = 0;
+    fat_dentry_t *ent, *sent = NULL;
+    uint32_t scl = cluster, soff = 0;
 
     /* Figure out how many directory entries there are in each cluster/block. */
     if(fs->sb.fs_type == FAT_FS_FAT32 || !(cluster & 0x80000000)) {
@@ -789,21 +852,75 @@ static int fat_get_free_dentry(fat_fs_t *fs, uint32_t cluster, uint32_t *rcl,
 
             /* If name[0] is zero, then we've hit the end of the directory. */
             if(ent->name[0] == FAT_ENTRY_EOD) {
-                *rv = ent;
-                *rcl = cluster;
-                *roff = i << 5;
-                return 0;
+                ++ct;
+
+                /* Just because we found the end of the directory doesn't mean
+                   that there is necessarily space (in the case of the root
+                   directory on FAT12/FAT16). */
+                if((cluster & 0x80000000)) {
+                    if(j + num - ct >= fs->sb.root_dir) {
+                        *rv = NULL;
+                        return -ENOSPC;
+                    }
+                }
+
+                /* Do we have enough space left in this cluster to store the
+                   entire dentry (long and short)? */
+                if(max - i - ct >= num || (cluster & 0x80000000)) {
+                    if(ct == 1) {
+                        *rv = ent;
+                        *rcl = cluster;
+                        *roff = i << 5;
+                    }
+                    else {
+                        *rv = sent;
+                        *rcl = scl;
+                        *roff = soff;
+                    }
+
+                    return 0;
+                }
+                else {
+                    /* We're gonna have to allocate another cluster to finish
+                       off the entry... */
+                    if(ct == 1) {
+                        sent = ent;
+                        scl = cluster;
+                        soff = i << 5;
+                    }
+
+                    goto alloc_another;
+                }
             }
             /* If name[0] == 0xE5, then this entry is empty (but there might
                still be additional entries after it). */
             else if(ent->name[0] == FAT_ENTRY_FREE) {
-                *rv = ent;
-                *rcl = cluster;
-                *roff = i << 5;
-                return 0;
-            }
+                ++ct;
 
+                /* If this is the first entry, set up the pointers we'll need
+                   later if this turns out to be where we store the directory
+                   entry. */
+                if(ct == 1) {
+                    sent = ent;
+                    scl = cluster;
+                    soff = i << 5;
+                }
+
+                /* If we've got enough entries, then we can return success
+                   at this point. */
+                if(ct == num) {
+                    *rv = sent;
+                    *rcl = scl;
+                    *roff = soff;
+                    return 0;
+                }
+            }
             /* Just ignore anything else... */
+            else {
+                /* Reset the counter, because we've broken the chain of free
+                   entries. */
+                ct = 0;
+            }
         }
 
         if(!(cluster & 0x80000000)) {
@@ -829,6 +946,7 @@ static int fat_get_free_dentry(fat_fs_t *fs, uint32_t cluster, uint32_t *rcl,
        for the directory (and it's not the end of the FAT12/FAT16 root).
        Attempt to allocate a new cluster, clear it out, and return a pointer to
        the beginning of it. */
+alloc_another:
     if((j = fat_allocate_cluster(fs, &err)) == FAT_INVALID_CLUSTER) {
         dbglog(DBG_ERROR, "Error allocating directory cluster: %s\n",
                strerror(err));
@@ -847,16 +965,26 @@ static int fat_get_free_dentry(fat_fs_t *fs, uint32_t cluster, uint32_t *rcl,
 
     /* Clear the new block and return a pointer to the beginning of it. */
     if(!(cl = fat_cluster_clear(fs, j, &err))) {
+        /* Deallocate the cluster we just allocated. */
         fat_write_fat(fs, j, 0);
+
         /* This will get properly truncated for FAT12/FAT16. */
         fat_write_fat(fs, old, 0x0FFFFFFF);
         *rv = NULL;
         return err;
     }
 
-    *rv = (fat_dentry_t *)cl;
-    *rcl = j;
-    *roff = 0;
+    if(ct == 0) {
+        *rv = (fat_dentry_t *)cl;
+        *rcl = j;
+        *roff = 0;
+    }
+    else {
+        *rv = sent;
+        *rcl = scl;
+        *roff = soff;
+    }
+
     return 0;
 }
 
@@ -897,6 +1025,250 @@ inline void fat_add_raw_dentry(fat_dentry_t *dent, const char shortname[11],
     fill_timestamp(tmv, &dent->adate, NULL, NULL);
 }
 
+static int create_shortname(fat_fs_t *fs, const char *fn, size_t fn_len,
+                            char out[11], fat_dentry_t *parent) {
+    char *fnc;
+    char denorm[13] = { 0 };
+    size_t i, j = 0, k = 0;
+    int has_ext = 0, last_period = -1, found_char = 0, tail = 0, done = 0;
+
+    if(!(fnc = (char *)malloc(fn_len + 1)))
+        return -ENOMEM;
+
+    /* Convert our copy to uppercase. */
+    for(i = 0; i < fn_len;) {
+        /* Skip non-usable characters. */
+        if(fn[i] <= ' ') {
+            ++i;
+        }
+        /* These should've already been caught. */
+        else if(fn[i] == '*' || fn[i] == ':' || fn[i] == '/' || fn[i] == '\\' ||
+                fn[i] == '|' || fn[i] == '"' || fn[i] == '?' || fn[i] == '<' ||
+                fn[i] == '>') {
+            free(fnc);
+            return -EILSEQ;
+        }
+        /* Convert characters that can't be used in a short name to '_'. */
+        else if(fn[i] == '+' || fn[i] == ',' || fn[i] == ';' || fn[i] == '[' ||
+                fn[i] == ']' || fn[i] == '=') {
+            fnc[j++] = '_';
+            found_char = 1;
+            ++i;
+
+            if(has_ext == 1)
+                has_ext = 2;
+        }
+        else if(fn[i] == '.') {
+            if(found_char) {
+                has_ext = 1;
+                last_period = j;
+                fnc[j++] = '.';
+            }
+            ++i;
+        }
+        /* Convert other normal ASCII to uppercase. */
+        else if((uint8_t)fn[i] <= 0x7F) {
+            fnc[j++] = toupper((int)fn[i++]);
+            found_char = 1;
+
+            if(has_ext == 1)
+                has_ext = 2;
+        }
+        /* Do we have a 2 byte UTF-8 sequence? */
+        else if((fn[i] & 0xE0) == 0xC0) {
+            fnc[j++] = '_';
+            i += 2;
+            found_char = 1;
+
+            if(has_ext == 1)
+                has_ext = 2;
+        }
+        /* Do we have a 3 UTF-8 byte sequence? */
+        else if((fn[i] & 0xF0) == 0xE0) {
+            fnc[j++] = '_';
+            i += 3;
+            found_char = 1;
+
+            if(has_ext == 1)
+                has_ext = 2;
+        }
+        /* 4 byte UTF-8 sequences can't be encoded as UCS-2. */
+        else {
+            free(fnc);
+            return -EILSEQ;
+        }
+    }
+
+    /* Terminate the end of the copied string. */
+    fnc[j] = 0;
+
+    /* Now we create the basis name. */
+    for(i = 0; k < 8 && i < j && i < (size_t)last_period; ++i) {
+        if(fnc[i] != '.')
+            denorm[k++] = fnc[i];
+    }
+
+    if(has_ext) {
+        denorm[k++] = '.';
+
+        for(i = 0; i < 3 && i + last_period + 1 < j; ++i) {
+            denorm[k++] = fnc[i + last_period + 1];
+        }
+    }
+
+    /* We're done with this now. */
+    free(fnc);
+
+    /* Next up is generating a numeric tail and seeingif the file already
+       exists in the directory. */
+    normalize_shortname(denorm, out);
+
+    while(!done) {
+        ++tail;
+
+        if(tail < 10) {
+            out[6] = '~';
+            out[7] = '0' + tail;
+        }
+        else if(tail < 100) {
+            out[5] = '~';
+            out[6] = '0' + (tail / 10);
+            out[7] = '0' + (tail % 10);
+        }
+        /* God help us if we ever really get below that one above... */
+        else if(tail < 1000) {
+            out[4] = '~';
+            out[5] = '0' + (tail / 100);
+            out[6] = '0' + ((tail / 10) % 10);
+            out[7] = '0' + (tail % 10);
+        }
+        else if(tail < 10000) {
+            out[3] = '~';
+            out[4] = '0' + (tail / 1000);
+            out[5] = '0' + ((tail / 100) % 10);
+            out[6] = '0' + ((tail / 10) % 10);
+            out[7] = '0' + (tail % 10);
+        }
+        else if(tail < 100000) {
+            out[2] = '~';
+            out[3] = '0' + (tail / 10000);
+            out[4] = '0' + ((tail / 1000) % 10);
+            out[5] = '0' + ((tail / 100) % 10);
+            out[6] = '0' + ((tail / 10) % 10);
+            out[7] = '0' + (tail % 10);
+        }
+        else if(tail < 1000000) {
+            out[1] = '~';
+            out[2] = '0' + (tail / 100000);
+            out[3] = '0' + ((tail / 10000) % 10);
+            out[4] = '0' + ((tail / 1000) % 10);
+            out[5] = '0' + ((tail / 100) % 10);
+            out[6] = '0' + ((tail / 10) % 10);
+            out[7] = '0' + (tail % 10);
+        }
+        else {
+            /* This really should never happen... There's not really a valid
+               way for this to ever happen... */
+            return -ENOSPC;
+        }
+
+        /* See if the filename exists that we're trying to use. */
+        if(fat_find_child2(fs, out, parent) == -ENOENT) {
+            done = 1;
+        }
+    }
+
+    return 0;
+}
+
+int fat_add_long_entry(fat_fs_t *fs, char sn[11], uint32_t dents,
+                       uint8_t attr, uint32_t cluster, uint32_t *rcl,
+                       uint32_t *roff, uint32_t rlcl, uint32_t rloff,
+                       uint8_t cs) {
+    fat_longname_t *ent;
+    fat_dentry_t *ent2;
+    int pos = (dents - 1) * 13, done = 0, err = 0;
+    uint32_t i, j = dents, old;
+    size_t max;
+    uint8_t *cl;
+
+    /* Figure out how many directory entries there are in each cluster/block. */
+    if(fs->sb.fs_type == FAT_FS_FAT32 || !(rlcl & 0x80000000)) {
+        /* Either we're working with a regular directory or we're working with
+           the root directory on FAT32 (which is the same as a normal
+           directory). We care about the number of entries per cluster. */
+        max = (fs->sb.bytes_per_sector * fs->sb.sectors_per_cluster);
+    }
+    else {
+        /* We're working with the root directory on FAT12/FAT16, so we need to
+           look at the number of entries per sector. */
+        max = fs->sb.bytes_per_sector;
+    }
+
+    while(!done) {
+        if(!(cl = fat_cluster_read(fs, rlcl, &err))) {
+            dbglog(DBG_ERROR, "Error reading directory at cluster %" PRIu32
+                   ": %s\n", cluster, strerror(err));
+            return -EIO;
+        }
+
+        /* Save some trouble later... */
+        fat_cluster_mark_dirty(fs, rlcl);
+
+        /* Start building the long name directory entries from the end of the
+           name to the start... */
+        for(i = rloff; i < max && j; i += 32, --j, pos -= 13) {
+            ent = (fat_longname_t *)(cl + i);
+
+            memset(ent, 0, sizeof(fat_longname_t));
+            ent->attr = FAT_ATTR_LONG_NAME;
+            ent->checksum = cs;
+            if(j == dents)
+                ent->order = FAT_ORDER_LAST | dents;
+            else
+                ent->order = j;
+
+            memcpy(ent->name1, &longname_buf2[pos], 10);
+            memcpy(ent->name2, &longname_buf2[pos + 5], 12);
+            memcpy(ent->name3, &longname_buf2[pos + 11], 4);
+        }
+
+        /* Did we finish with the long entry with space left to spare in the
+           current block/cluster? If so, drop the short name here. Otherwise,
+           we'll loop back around and hit this code on the next block/cluster
+           pass... */
+        if(!j && i < max) {
+            ent2 = (fat_dentry_t *)(cl + i);
+
+            /* Fill it in. */
+            fat_add_raw_dentry(ent2, sn, attr, cluster);
+            done = 1;
+            *rcl = rlcl;
+            *roff = i;
+        }
+
+        if(!done && !(rlcl & 0x80000000)) {
+            old = rlcl;
+            rlcl = fat_read_fat(fs, old, &err);
+            if(rlcl == 0xFFFFFFFF)
+                return -err;
+
+            if(fat_is_eof(fs, rlcl))
+                done = 1;
+        }
+        else {
+            ++rlcl;
+
+            if(j >= fs->sb.root_dir)
+                return -ENOSPC;
+        }
+
+        rloff = 0;
+    }
+
+    return 0;
+}
+
 int fat_add_dentry(fat_fs_t *fs, const char *fn, fat_dentry_t *parent,
                    uint8_t attr, uint32_t cluster, uint32_t *rcl,
                    uint32_t *roff, uint32_t *rlcl, uint32_t *rloff) {
@@ -904,26 +1276,69 @@ int fat_add_dentry(fat_fs_t *fs, const char *fn, fat_dentry_t *parent,
     int err;
     uint32_t cl;
     char comp[11];
+    size_t len, len2;
+    int dents;
+    uint8_t cs;
 
-    /* XXXX: For now, this only supports short entries... */
+    cl = parent->cluster_low | (parent->cluster_high << 16);
+
     if(is_component_short(fn)) {
         normalize_shortname(fn, comp);
-        cl = parent->cluster_low | (parent->cluster_high << 16);
 
-        if((err = fat_get_free_dentry(fs, cl, rcl, roff, &dent)) < 0)
-            return -err;
+        if((err = fat_get_free_dentry(fs, cl, rcl, roff, &dent, 1)) < 0)
+            return err;
 
         /* Fill it in. */
         fat_add_raw_dentry(dent, comp, attr, cluster);
 
-        /* Clean up... */
+        /* Clean up. */
         *rlcl = 0;
         *rloff = 0;
         fat_cluster_mark_dirty(fs, *rcl);
         return 0;
     }
     else {
-        return -ENAMETOOLONG;
+        /* Not exact, but good enough. */
+        if((len2 = strlen(fn)) > 255)
+            return -ENAMETOOLONG;
+
+        /* Convert the filename to UCS-2 first. */
+        if(fat_utf8_to_ucs2(longname_buf2, (const uint8_t *)fn, 256,
+                            strlen(fn)) < 0) {
+            return -EILSEQ;
+        }
+
+        /* Figure out how long it is in UCS-2 codepoints. */
+        len = fat_strlen_ucs2(longname_buf2);
+
+        /* Figure out how many directory entries we're gonna need. */
+        dents = len / 13;
+
+        /* Make things easier later... */
+        if(len % 13) {
+            ++dents;
+            memset(longname_buf2 + len, 0, 13 * sizeof(uint16_t));
+        }
+
+        /* Come up with the short name the file will have. */
+        if((err = create_shortname(fs, fn, len2, comp, parent)) < 0)
+            return err;
+
+        /* Calculate the checksum of the short filename. */
+        cs = fat_shortname_checksum(comp);
+
+        /* Find a contiguous place in the directory to put our long entries and
+           the short entry. */
+        if((err = fat_get_free_dentry(fs, cl, rlcl, rloff, &dent,
+                                      dents + 1)) < 0)
+            return err;
+
+        /* Attempt to add the filename... */
+        if((err = fat_add_long_entry(fs, comp, dents, attr, cluster, rcl,
+                                     roff, *rlcl, *rloff, cs)))
+            return err;
+
+        return 0;
     }
 }
 

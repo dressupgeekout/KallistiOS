@@ -24,28 +24,44 @@ extern int _bss_start, end;
 
 void _atexit_call_all();
 
+#if __GNUC__ == 4
+#define _init init
+#define _fini fini
+#endif
+
 #if __GNUC__ >= 4
-void init(void);
-void fini(void);
+void _init(void);
+void _fini(void);
 void __verify_newlib_patch();
 #endif
 
 int main(int argc, char **argv);
 uint32 _fs_dclsocket_get_ip(void);
 
+#ifdef _arch_sub_naomi
+#define SAR2    ((vuint32 *)0xFFA00020)
+#define CHCR2   ((vuint32 *)0xFFA0002C)
+#define DMAOR   ((vuint32 *)0xFFA00040)
+#endif
+
 /* We have to put this here so we can include plat-specific devices */
 dbgio_handler_t * dbgio_handlers[] = {
+#ifndef _arch_sub_naomi
     &dbgio_dcload,
     &dbgio_dcls,
     &dbgio_scif,
-    &dbgio_fb,
-    &dbgio_null
+    &dbgio_null,
+    &dbgio_fb
+#else
+    &dbgio_null,
+    &dbgio_fb
+#endif
 };
 int dbgio_handler_cnt = sizeof(dbgio_handlers) / sizeof(dbgio_handler_t *);
 
-/* Auto-init stuff: comment out here if you don't like this stuff
-   to be running in your build, and also below in arch_main() */
-/* #if 0 */
+/* Auto-init stuff: override with a non-weak symbol if you don't want all of
+   this to be linked into your code (and do the same with the
+   arch_auto_shutdown function too). */
 int  __attribute__((weak)) arch_auto_init() {
     union {
         uint32 ipl;
@@ -60,11 +76,13 @@ int  __attribute__((weak)) arch_auto_init() {
     irq_init();         /* IRQs */
     irq_disable();          /* Turn on exceptions */
 
+#ifndef _arch_sub_naomi
     if(!(__kos_init_flags & INIT_NO_DCLOAD))
         fs_dcload_init_console();   /* Init dc-load console, if applicable */
 
-    // Init SCIF for debug stuff (maybe)
+    /* Init SCIF for debug stuff (maybe) */
     scif_init();
+#endif
 
     /* Init debug IO */
     dbgio_init();
@@ -73,7 +91,7 @@ int  __attribute__((weak)) arch_auto_init() {
     if(__kos_init_flags & INIT_QUIET)
         dbgio_disable();
     else {
-        // PTYs not initialized yet
+        /* PTYs not initialized yet */
         dbgio_write_str("\n--\n");
         dbgio_write_str(kos_get_banner());
     }
@@ -104,16 +122,18 @@ int  __attribute__((weak)) arch_auto_init() {
         fs_romdisk_mount("/rd", __kos_romdisk, 0);
     }
 
+#ifndef _arch_sub_naomi
     if(!(__kos_init_flags & INIT_NO_DCLOAD) && *DCLOADMAGICADDR == DCLOADMAGICVALUE) {
         dbglog(DBG_INFO, "dc-load console support enabled\n");
         fs_dcload_init();
     }
 
     fs_iso9660_init();
+#endif
     vmufs_init();
     fs_vmu_init();
 
-    // Initialize library handling
+    /* Initialize library handling */
     library_init();
 
     /* Now comes the optional stuff */
@@ -122,6 +142,7 @@ int  __attribute__((weak)) arch_auto_init() {
         maple_wait_scan();  /* Wait for the maple scan to complete */
     }
 
+#ifndef _arch_sub_naomi
     if(__kos_init_flags & INIT_NET) {
         ip.ipl = 0;
 
@@ -147,13 +168,16 @@ int  __attribute__((weak)) arch_auto_init() {
             }
         }
     }
+#endif
 
     return 0;
 }
 
 void  __attribute__((weak)) arch_auto_shutdown() {
+#ifndef _arch_sub_naomi
     fs_dclsocket_shutdown();
     net_shutdown();
+#endif
 
     irq_disable();
     snd_shutdown();
@@ -161,10 +185,14 @@ void  __attribute__((weak)) arch_auto_shutdown() {
     hardware_shutdown();
     pvr_shutdown();
     library_shutdown();
+#ifndef _arch_sub_naomi
     fs_dcload_shutdown();
+#endif
     fs_vmu_shutdown();
     vmufs_shutdown();
+#ifndef _arch_sub_naomi
     fs_iso9660_shutdown();
+#endif
     fs_ramdisk_shutdown();
     fs_romdisk_shutdown();
     fs_pty_shutdown();
@@ -172,13 +200,20 @@ void  __attribute__((weak)) arch_auto_shutdown() {
     thd_shutdown();
     rtc_shutdown();
 }
-/* endif */
 
 /* This is the entry point inside the C program */
 int arch_main() {
     uint8 *bss_start = (uint8 *)(&_bss_start);
     uint8 *bss_end = (uint8 *)(&end);
     int rv;
+
+#ifdef _arch_sub_naomi
+    /* Ugh. I'm really not sure why we have to set up these DMA registers this
+       way on boot, but failing to do so breaks maple... */
+    *SAR2 = 0;
+    *CHCR2 = 0x1201;
+    *DMAOR = 0x8201;
+#endif /* _arch_sub_naomi */
 
     /* Ensure that we pull in crtend.c in the linking process */
 #if __GNUC__ < 4
@@ -199,7 +234,7 @@ int arch_main() {
     arch_ctors();
 #else
     __verify_newlib_patch();
-    init();
+    _init();
 #endif
 
     /* Call the user's main function */
@@ -226,7 +261,7 @@ void arch_shutdown() {
 #if __GNUC__ < 4
     arch_dtors();
 #else
-    fini();
+    _fini();
 #endif
 
     dbglog(DBG_CRITICAL, "arch: shutting down kernel\n");
@@ -262,6 +297,7 @@ void arch_exit() {
     switch(arch_exit_path) {
         default:
             dbglog(DBG_CRITICAL, "arch: arch_exit_path has invalid value!\n");
+            __fallthrough;
         case ARCH_EXIT_RETURN:
             arch_return();
             break;

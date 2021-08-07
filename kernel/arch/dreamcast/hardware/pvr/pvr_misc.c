@@ -37,6 +37,11 @@ void pvr_set_shadow_scale(int enable, float scale_value) {
     PVR_SET(PVR_CHEAP_SHADOW, ((!!enable) << 8) | (s & 0xFF));
 }
 
+/* Set the Z-Clip value (that is to say the depth of the background layer). */
+void pvr_set_zclip(float zc) {
+    pvr_state.zclip = zc;
+}
+
 /* Return the current VBlank count */
 int pvr_get_vbl_count() {
     return pvr_state.vbl_count;
@@ -168,6 +173,10 @@ void pvr_begin_queued_render() {
     uint32      vert_end;
     int     i;
     int bufn = pvr_state.view_target;
+    union {
+        float f;
+        uint32 i;
+    } zclip;
 
     /* Get the appropriate buffer */
     tbuf = pvr_state.ta_buffers + (pvr_state.ta_target ^ 1);
@@ -220,7 +229,8 @@ void pvr_begin_queued_render() {
     }
 
     PVR_SET(PVR_BGPLANE_CFG, vert_end); /* Bkg plane location */
-    PVR_SET(PVR_BGPLANE_Z, *((uint32*)&pvr_state.zclip));
+    zclip.f = pvr_state.zclip;
+    PVR_SET(PVR_BGPLANE_Z, zclip.i);
     PVR_SET(PVR_PCLIP_X, pvr_state.pclip_x);
     PVR_SET(PVR_PCLIP_Y, pvr_state.pclip_y);
 
