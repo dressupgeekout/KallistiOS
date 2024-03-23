@@ -7,7 +7,6 @@
 .*.swp
 .DS_Store
 doc/reference/
-environ.sh
 romdisk.img
 kernel/stubs/*.c
 kernel/exports/kernel_exports.c

@@ -1,0 +1,192 @@
+# KallistiOS Environment Settings
+#
+# This is a sample script for configuring and customizing your
+# KOS build environment. Modify it to suit your setup. Several
+# settings may be enabled optionally or are provided with
+# alternative values.
+#
+# This script is typically sourced in your current shell environment
+# (probably by .bashrc, .bash_profile, or something similar), so that
+# the KOS environment is set up automatically for each shell session.
+#
+
+# CHARLOTTE make it more obvious we're in the environment
+export PS1="(kos)${PS1}"
+
+# Build Architecture
+#
+# Set the major architecture you'll be building for.
+# The only option here is "dreamcast" as of KOS 2.0.0.
+#
+export KOS_ARCH="dreamcast"
+
+# Build Sub-Architecture
+#
+# Defines the sub architecture your configuration
+# is targeting or uses an existing value that
+# can be set externally via your IDE.
+#
+# Valid values:
+#   "pristine" - Dreamcast console or HKT-0120 devkit (default)
+#   "naomi"    - NAOMI or NAOMI 2 arcade board
+#
+if [ -z "${KOS_SUBARCH}" ] ; then
+    export KOS_SUBARCH="pristine"
+else
+    export KOS_SUBARCH
+fi
+
+# KOS Root Path
+#
+# Specifies the path to the KOS root directory
+#
+export KOS_BASE="/opt/toolchains/dc/kos"
+
+# KOS-Ports Path
+#
+# Specifies the path to the KOS-ports directory
+#
+export KOS_PORTS="${KOS_BASE}/../kos-ports"
+
+# SH Compiler Prefixes
+#
+# Specifies the path to and prefix for the main SH
+# GCC toolchain used to target the Dreamcast's SH4 CPU.
+#
+export KOS_CC_BASE="/opt/toolchains/dc/sh-elf"
+export KOS_CC_PREFIX="sh-elf"
+
+# ARM Compiler Prefixes
+#
+# Specifies the path to and prefix for the additional ARM
+# GCC toolchain used to target the Dreamcast's AICA SPU.
+#
+export DC_ARM_BASE="/opt/toolchains/dc/arm-eabi"
+export DC_ARM_PREFIX="arm-eabi"
+
+# CMake Toolchain Path
+#
+# Specifies the path to the toolchain file used to target
+# KOS with the "cmake" build utility.
+#
+export KOS_CMAKE_TOOLCHAIN="${KOS_BASE}/utils/cmake/dreamcast.toolchain.cmake"
+
+# Genromfs Utility Path
+#
+# Specifies the path to the utility which is used by KOS
+# to create romdisk filesystem images.
+#
+export KOS_GENROMFS="${KOS_BASE}/utils/genromfs/genromfs"
+
+# Make Utility
+#
+# Configures the tool to be used as the main "make" utility
+# for building GNU Makefiles. On a platform such as BSD,
+# the default can be changed to "gmake," for the GNU
+# implementation.
+#
+export KOS_MAKE="make"
+#export KOS_MAKE="gmake"
+
+# Loader Utility
+#
+# Specifies the loader to be used with the "make run" targets
+# in the KOS examples. Defaults to using a preconfigured version
+# of dc-tool. Use one of the other options for a manual dc-tool-ip
+# or dc-tool-serial configuration, remembering to change the values
+# for the Dreamcast's IP address or the serial port interface.
+#
+export KOS_LOADER="dc-tool -x"
+#export KOS_LOADER="dc-tool-ip -t 192.168.1.100 -x"
+#export KOS_LOADER="dc-tool-ser -t /dev/ttyS0 -x"
+
+# Default Compiler Flags
+#
+# Resets build flags. You can also initialize them to some preset
+# default values here if you wish.
+#
+export KOS_INC_PATHS=""
+export KOS_CFLAGS=""
+export KOS_CPPFLAGS=""
+export KOS_LDFLAGS=""
+export KOS_AFLAGS=""
+export DC_ARM_LDFLAGS=""
+
+# Optimization Level
+#
+# Controls the baseline optimization level to use when building.
+# Typically this is -Og (debugging), -O0, -01, -02, or -03.
+# NOTE: For our target, -O4 is a valid optimization level that has
+# been seen to have some performance impact as well.
+#
+export KOS_CFLAGS="${KOS_CFLAGS} -O2"
+
+# Additional Optimizations
+#
+# Uncomment this to enable what has been found empirically to be
+# the optimal set of additional flags for release build performance
+# on the current stable toolchain. NOTE: Certain KOS-ports and examples
+# do not work properly with "-flto=auto"!
+#
+#export KOS_CFLAGS="${KOS_CFLAGS} -freorder-blocks-algorithm=simple -flto=auto"
+
+# Frame Pointers
+#
+# Controls whether frame pointers are emitted or not. Disabled by
+# default. Enable them if you plan to use GDB for debugging.
+#
+export KOS_CFLAGS="${KOS_CFLAGS} -fomit-frame-pointer"
+#export KOS_CFLAGS="${KOS_CFLAGS} -fno-omit-frame-pointer -DFRAME_POINTERS"
+
+# GCC Builtin Functions
+#
+# Comment out this line to enable GCC to use its own builtin implementations of
+# certain standard library functions. Under certain conditions, this can allow
+# compiler-optimized implementations to replace standard function invocations.
+# The downside of this is that it COULD interfere with Newlib or KOS implementations
+# of these functions, and it has not been tested thoroughly to ensure compatibility.
+#
+export KOS_CFLAGS="${KOS_CFLAGS} -fno-builtin"
+
+# Fast Math Instructions
+#
+# Uncomment this line to enable the optimized fast-math instructions (FSSRA,
+# FSCA, and FSQRT) for calculating sin/cos, inverse square root, and square roots.
+# These can result in substantial performance gains for these kinds of operations;
+# however, they do so at the price of accuracy and are not IEEE compliant.
+# NOTE: This also requires -fno-builtin be removed from KOS_CFLAGS to take effect!
+#
+# export KOS_CFLAGS="${KOS_CFLAGS} -ffast-math -ffp-contract=fast -mfsrra -mfsca"
+
+# SH4 Floating Point Arithmetic Precision
+#
+# KallistiOS only officially supports the single-precision-only floating-point
+# arithmetic mode (-m4-single-only), but double precision default (-m4) or
+# double precision, single default (-m4-single) modes can be enabled here by
+# adjusting KOS_SH4_PRECISION.
+# WARNING: Adjusting this setting has a high likelihood of breaking KallistiOS,
+#          kos-ports, and existing codebases which assume -m4-single-only.
+#          Do not touch this setting unless you know what you are doing!
+# NOTE: Altering this setting also requires your toolchain to have been built
+#       with support for these modes, which is not the case by default!
+#
+export KOS_SH4_PRECISION="-m4-single-only"
+
+# Additional Tools Path
+#
+# If not already set, add "bin" directory to PATH variable, which is where
+# additional tools such as dc-tool-ip and dc-tool-serial are typically
+# installed. Comment this out if you don't want this included within your PATH.
+#
+if [[ ":$PATH:" != *":${KOS_CC_BASE}/bin:/opt/toolchains/dc/bin"* ]]; then
+  export PATH="${PATH}:${KOS_CC_BASE}/bin:/opt/toolchains/dc/bin"
+fi
+
+# Shared Compiler Configuration
+#
+# Include sub architecture-independent configuration file for shared
+# environment settings. If you want to configure additional compiler
+# options or see where other build flags are set, look at this file.
+#
+. ${KOS_BASE}/environ_base.sh
+
